@@ -28,6 +28,7 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
   private readonly prefetchCount: number;
   private readonly queueOptions: any;
   private readonly isGlobalPrefetchCount: boolean;
+  private readonly noAck: boolean;
 
   constructor(private readonly options: RmqOptions['options']) {
     super();
@@ -43,6 +44,7 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
     this.queueOptions =
       this.getOptionsProp(this.options, 'queueOptions') ||
       RQM_DEFAULT_QUEUE_OPTIONS;
+    this.noAck = this.getOptionsProp(this.options, 'noAck') || false;
 
     this.loadPackage('amqplib', ServerRMQ.name, () => require('amqplib'));
     rqmPackage = this.loadPackage(
@@ -85,13 +87,13 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
   public async setupChannel(channel: any, callback: Function) {
     await channel.assertQueue(this.queue, this.queueOptions);
     await channel.prefetch(this.prefetchCount, this.isGlobalPrefetchCount);
-    channel.consume(this.queue, (msg: any) => this.handleMessage(msg), {
-      noAck: true,
+    channel.consume(this.queue, (msg: any) => this.handleMessage(channel, msg), {
+      noAck: this.noAck,
     });
     callback();
   }
 
-  public async handleMessage(message: any): Promise<void> {
+  public async handleMessage(channel:any, message: any): Promise<void> {
     const { content, properties } = message;
     const rawMessage = JSON.parse(content.toString());
     const packet = this.deserializer.deserialize(rawMessage);
@@ -100,7 +102,8 @@ export class ServerRMQ extends Server implements CustomTransportStrategy {
       : JSON.stringify(packet.pattern);
 
     if (isUndefined((packet as IncomingRequest).id)) {
-      return this.handleEvent(pattern, packet);
+      await this.handleEvent(pattern, packet);
+      return channel.ack(message);
     }
     const handler = this.getHandlerByPattern(pattern);
 
